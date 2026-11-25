@@ -111,6 +111,31 @@ class IntegrationTests(unittest.TestCase):
             self.inbox.jump(self.inbox.records()[0]["token"], "not-a-client")
         self.assertEqual(len(self.inbox.records()), 1)
 
+    def test_dismiss_only_selected_notification(self):
+        self.push(message="keep")
+        self.push(self.hidden, message="dismiss")
+        first, second = self.inbox.records()
+        self.assertTrue(self.inbox.dismiss(second["token"]))
+        self.assertEqual([r["token"] for r in self.inbox.records()], [first["token"]])
+        self.assertIn("待处理 1", self.inbox.status())
+        self.assertEqual(self.tmux("display-message", "-p", "-c", self.client, "#{pane_id}").strip(), self.pane)
+
+    def test_dismiss_stale_token_keeps_new_notification(self):
+        self.push(message="old")
+        token = self.inbox.records()[0]["token"]
+        self.push(message="new")
+        self.assertFalse(self.inbox.dismiss(token))
+        self.assertEqual(self.inbox.records()[0]["message"], "new")
+
+    def test_dismiss_is_limited_to_current_server(self):
+        self.push()
+        token = self.inbox.records()[0]["token"]
+        key = self.inbox.key
+        self.inbox.key += ":other-server"
+        self.assertFalse(self.inbox.dismiss(token))
+        self.inbox.key = key
+        self.assertEqual(self.inbox.records()[0]["token"], token)
+
     def test_new_arrival_during_jump_survives(self):
         self.push()
         token = self.inbox.records()[0]["token"]
@@ -250,6 +275,51 @@ class IntegrationTests(unittest.TestCase):
             time.sleep(.05)
         self.assertEqual(self.inbox.records(), [])
         self.assertEqual(self.tmux("display-message", "-p", "-c", self.client, "#{pane_id}").strip(), self.other)
+
+    def test_real_popup_ctrl_d_dismisses_without_jumping_or_closing(self):
+        self.push(message="FIRST_ROW")
+        self.push(self.hidden, message="SECOND_ROW_TARGET")
+        command = [sys.executable, str(ROOT / "scripts/inbox.py"), "--socket", self.socket,
+                   "popup", "--client", self.client]
+        proc = subprocess.Popen(command, env=self.environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        def wait_for_output(needle):
+            output = b""
+            deadline = time.monotonic() + 4
+            while time.monotonic() < deadline and needle not in output:
+                if select.select([self.master], [], [], .1)[0]:
+                    output += os.read(self.master, 65536)
+            self.assertIn(needle, output)
+
+        def wait_for_panes(expected):
+            for _ in range(60):
+                if [row["pane"] for row in self.inbox.records()] == expected:
+                    break
+                if select.select([self.master], [], [], .05)[0]:
+                    os.read(self.master, 65536)
+            self.assertEqual([row["pane"] for row in self.inbox.records()], expected)
+            self.assertIsNone(proc.poll(), "deleting a notification closed the picker")
+            self.assertEqual(self.tmux("display-message", "-p", "-c", self.client, "#{pane_id}").strip(), self.pane)
+
+        try:
+            wait_for_output(b"SECOND_ROW_TARGET")
+            os.write(self.master, b"\x1b[B")  # Select the second item, not the first.
+            time.sleep(.1)
+            os.write(self.master, b"\x04")  # Ctrl+D
+            wait_for_panes([self.other])
+            # Wait for fzf to reload after the deletion before deleting the last row.
+            time.sleep(.2)
+            os.write(self.master, b"\x04")
+            wait_for_panes([])
+            self.assertEqual(self.inbox.status(), "")
+            result = subprocess.run([sys.executable, str(ROOT / "scripts/inbox.py"), "--socket", self.socket, "list"],
+                                    env=self.environment, check=True, capture_output=True, text=True)
+            self.assertEqual(result.stdout, "")  # No synthetic blank row in an empty picker.
+        finally:
+            if proc.poll() is None:
+                os.write(self.master, b"\x1b")
+            _, error = proc.communicate(timeout=5)
+        self.assertEqual(proc.returncode, 0, error.decode())
 
     def test_real_mouse_status_and_select_second_row(self):
         self.tmux("set-option", "-g", "status-right", "")

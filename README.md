@@ -1,10 +1,10 @@
 # tmux-agent-inbox
 
-独立的 tmux 通知收件箱插件，使用 Python 标准库保存 Claude Code 和 Codex 的待处理通知。点击状态栏或 Prefix + N 打开列表，Prefix + Alt-n 处理下一条。
+独立的 tmux 通知收件箱插件，使用 Python 标准库保存 Claude Code 和 Codex 的待处理通知。点击状态栏或 Prefix + N 打开列表，Prefix + Alt-n 处理下一条。在列表中按 Ctrl+D 可删除选中的通知，不跳转 pane。
 
 ## 安装
 
-需要 Python 3.9+、tmux 和 fzf。使用 Git 安装插件；以下示例使用计划发布的 GitHub 仓库 `onns/tmux-agent-inbox`，如果使用其他仓库地址，请替换对应 URL。
+需要 Python 3.9+、tmux 和 fzf。使用 Git 安装插件；以下示例使用 GitHub 仓库 `onns/tmux-agent-inbox`，如果使用其他仓库地址，请替换对应 URL。
 
 ### TPM
 
@@ -36,6 +36,18 @@ git -C ~/.tmux/plugins/tmux-agent-inbox pull --ff-only
 ```
 
 TPM 和手动加载选择其一。插件只在 tmux 运行时注册状态栏、快捷键及 pane 退出事件，不修改配置文件。
+
+## 通知列表
+
+| 操作 | 作用 |
+| --- | --- |
+| `Prefix + N` / 点击状态栏 | 打开通知列表 |
+| `Enter` / 点击某条通知 | 处理通知，并在可以定位时跳转 pane |
+| `Ctrl+D` | 删除选中的通知，留在列表中继续操作 |
+| `Esc` | 关闭列表，保留剩余通知 |
+| `Prefix + Alt-n` | 处理下一条通知 |
+
+`Ctrl+D` 只清除收件箱中的该条通知和状态栏计数，不会关闭 pane、停止 agent 或改变其任务状态。如果选中后收到新的通知，旧条目的删除不会清除新的通知。
 
 ## Agent hooks
 

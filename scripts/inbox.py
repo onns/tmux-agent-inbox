@@ -160,6 +160,15 @@ class Inbox:
         except RuntimeError:
             pass  # No attached clients is normal for hook producers.
 
+    def dismiss(self, token):
+        """Delete only the selected notification version, without switching panes."""
+        with self.db:
+            deleted = self.db.execute("DELETE FROM notifications WHERE server=? AND token=?",
+                                      (self.key, token)).rowcount
+        if deleted:
+            self.refresh()
+        return bool(deleted)
+
     def jump(self, token, client):
         record = next((r for r in self.records() if r["token"] == token), None)
         if record is None:
@@ -177,11 +186,8 @@ class Inbox:
             actual = self.call("display-message", "-p", "-c", client, "#{pane_id}").strip()
             if actual != pane:
                 raise RuntimeError("pane 跳转未完成，通知已保留")
-        with self.db:
-            # A notification arriving during navigation must survive this acknowledgement.
-            self.db.execute("DELETE FROM notifications WHERE server=? AND pane=? AND token=?",
-                            (self.key, record["pane"], token))
-        self.refresh()
+        # A notification arriving during navigation must survive this acknowledgement.
+        self.dismiss(token)
 
     def lines(self):
         for row in self.records():
@@ -191,19 +197,22 @@ class Inbox:
                              row["project"], row["location"], age_text, row["message"]])
 
     def picker(self, client):
-        if not self.records():
+        rows = list(self.lines())
+        if not rows:
             self.call("display-message", "-c", client, "没有待处理通知")
             return
         # Periodic reload includes new arrivals while retaining fzf's query/selection.
-        reload_command = shlex.join([PYTHON, str(ROOT / "scripts/inbox.py"),
-                                     "--socket", self.socket, "list"])
+        base = shlex.join([PYTHON, str(ROOT / "scripts/inbox.py"), "--socket", self.socket])
+        reload_command = base + " list"
+        dismiss_command = base + " dismiss {1}"
         env = dict(os.environ, FZF_DEFAULT_OPTS="", FZF_DEFAULT_OPTS_FILE="/dev/null")
         command = ["fzf", "--reverse", "--no-sort", "--delimiter=\t", "--with-nth=2..", "--no-multi",
-                   "--header=待处理通知 · 单击 / Enter 处理 · 可定位时跳转 · Esc 保留退出",
+                   "--header=待处理通知 · 单击 / Enter 跳转处理 · Ctrl+D 删除 · Esc 保留退出",
                    "--prompt=搜索 > ", "--bind=left-click:accept,double-click:accept",
+                   "--bind=ctrl-d:execute-silent(" + dismiss_command + ")+reload(" + reload_command + ")",
                    "--bind=" + "ctrl-r:reload(" + reload_command + ")",
                    "--bind=" + "every(2):reload(" + reload_command + ")"]
-        result = subprocess.run(command, input="\n".join(self.lines()) + "\n",
+        result = subprocess.run(command, input="\n".join(rows) + "\n",
                                 stdout=subprocess.PIPE, text=True, env=env)
         if result.returncode == 0 and result.stdout.strip():
             self.jump(result.stdout.split("\t", 1)[0], client)
@@ -280,6 +289,7 @@ def main():
     jump = sub.add_parser("jump")
     jump.add_argument("token")
     jump.add_argument("--client", required=True)
+    sub.add_parser("dismiss").add_argument("token")
     sub.add_parser("status")
     sub.add_parser("prune")
     listing = sub.add_parser("list")
@@ -305,13 +315,19 @@ def main():
         elif args.command == "push":
             inbox.push(args.pane, args.source, args.kind, args.message)
         elif args.command == "list":
-            print(json.dumps(inbox.records(), ensure_ascii=False) if args.json else "\n".join(inbox.lines()))
+            if args.json:
+                print(json.dumps(inbox.records(), ensure_ascii=False))
+            else:
+                for line in inbox.lines():
+                    print(line)
         elif args.command == "status":
             print(inbox.status())
         elif args.command == "prune":
             inbox.records()
         elif args.command == "jump":
             inbox.jump(args.token, args.client)
+        elif args.command == "dismiss":
+            inbox.dismiss(args.token)
         elif args.command == "next":
             rows = inbox.records()
             if rows:
