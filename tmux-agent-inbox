@@ -1,0 +1,9 @@
+#!/bin/sh
+PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+export PATH
+plugin_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+plugin_python="${TMUX_AGENT_INBOX_PYTHON:-python3}"
+case "${1:-}" in
+    integrate|reload) exec "$plugin_python" "$plugin_root/scripts/configure.py" load ;;
+    *) exec "$plugin_python" "$plugin_root/scripts/inbox.py" "$@" ;;
+esac
